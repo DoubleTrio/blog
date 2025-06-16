@@ -452,12 +452,22 @@ CH2: [ R1, R2, R3, ... ]
 
 Here's some example output audio using the `TimeStretch` effect at 2x and 0.5x speed [here](../audaspace_rubberband/index.qmd).
 
+As for benchmarking, I tested the effect on a 194 minute song with a buffer size of 4048 and stretched the song by 2x. Here are the times for the essential methods for time-stretching with the `Rubberband Library`:
+
+`Study time:` 0.687821 seconds
+
+`Process time:` 6.51549 seconds
+
+`Retrieve time:` 0.970281 seconds
+
+
+Overall, it took around 8.17 seconds to finish the entire time-stretching process.
 
 ## Questions
 
 - When implementing time-stretching in Blender's VSE, how should we handle audio scrubbing and changing the playback speed with the retiming keys while the audio is playing? Time-stretching is very expensive, and it would be good to see how other video editors overcome this... 
 - Should the real-time option of the `Rubberband Library` be used instead of the offline option. The difference between the options can be found [here](https://breakfastquay.com/rubberband/code-doc/). Likely that real-time is used as the time ratio cannot be changed after the audio is "studied"? We can call the `reset` method on the stretcher and pass the original audio data again... (probably not a good idea)
-- Handling speed transitions, so when audio is transitioning playback speed from 13% to 67%, how should that be handled? (Call the `process` method for the stretcher for the different speedw at each frame?)
+- Handling speed transitions, so when audio is transitioning playback speed from 13% to 67%, how should that be handled? (Call the `process` method for the stretcher for the different speed at each frame?)
 
 
 ## Pitch Correction Implemention Details Dump 
