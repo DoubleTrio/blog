@@ -1,0 +1,44 @@
+---
+title: "Output WAV Files"
+author: "TheKaceFiles"
+date: "2025-06-14"
+description: "Wav File Examples"
+categories: [c++, audaspace, blender]
+jupyter: python3
+---
+
+
+### 0.5x Speed
+```{python}
+#| echo: false
+from IPython.display import Audio
+Audio("0.5xtimestretch.wav", rate=44100)
+```
+
+### 2x Speed
+```{python}
+#| echo: false
+from IPython.display import Audio
+Audio("2xtimestretch.wav", rate=44100)
+```
+
+### Delay.wav
+```{python}
+#| echo: false
+from IPython.display import Audio
+Audio("delay.wav", rate=44100)
+```
+### Loop.wav
+
+```{python}
+#| echo: false
+from IPython.display import Audio
+Audio("loop.wav", rate=44100)
+```
+
+### Fader.wav
+```{python}
+#| echo: false
+from IPython.display import Audio
+Audio("fader.wav", rate=44100)
+```

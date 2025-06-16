@@ -1,0 +1,472 @@
+---
+title: "Exploring the Unknown Audaspace"
+author: "TheKaceFiles"
+date: "2025-06-14"
+description: "A collection of random notes for the week of 2025-06-09"
+categories: [c++, audaspace, blender]
+jupyter: python3
+---
+
+## Intro
+
+Over the past week, I've been exploring Audaspace's codebase and messing around with the library to get a better intuition into integrating The Rubber Band Library for pitch correction. In particular, I'm going to explore Audaspace's `Sequence` and `SequenceEntry` class and utilizing the `AnimateableProperty` variable for adjusting pitch, Blender's VSE utilizes these classes. I'll be using the Ducktales Moon Theme (1989) by [Tonomura Hiroshige](https://www.vgmpf.com/Wiki/index.php/Hiroshige_Tonomura) and the Ducktales NES Theme (1989) composed by [Mark Mueller](https://en.wikipedia.org/wiki/Mark_Mueller) as the test track(s) for experimentation.
+
+**Moon Theme (dt_moon_theme.mp3)** 
+```{python}
+#| echo: false
+from IPython.display import Audio
+Audio("dt_moon_theme.mp3", rate=44100)
+```
+
+**Main Theme (dt_main_theme.mp3)**
+```{python}
+#| echo: false
+from IPython.display import Audio
+Audio("dt_main_theme.mp3", rate=44100)
+```
+
+In particular, I am going to explore animating pitch and applying different effects from Audaspace's `fx` folder.
+
+## Loading in Audio Files
+
+Audaspace provides a way to load in audio files through its `File` class. The example program below simply reads the `dt_moon_theme.mp3` and then writes to `example1.wav` using the `FileWriter` class after running `./example1 dt_moon_theme.mp3`
+
+<details> 
+  <summary>Code</summary>
+
+```{c++}
+// example1.cpp
+#include <iostream>
+#include "file/File.h"
+#include "file/FileWriter.h"
+using namespace aud;
+
+int main(int argc, char* argv[])
+{
+	if(argc != 2)
+	{
+		std::cerr << "Usage: " << argv[0] << " <filename>" << std::endl;
+		return 1;
+	}
+  
+	File file(argv[1]);
+  
+	StreamInfo streamInfo = file.queryStreams()[0];
+
+	DeviceSpecs outspecs = streamInfo.specs;
+
+	std::shared_ptr<IWriter> writer = FileWriter::createWriter("example1.wav", outspecs, CONTAINER_WAV, CODEC_PCM, 0);
+	
+	int totalsamples = int(outspecs.specs.rate * streamInfo.duration);
+	printf("Total Samples: %d\n", totalsamples);
+	FileWriter::writeReader(file.createReader(), writer, totalsamples, AUD_DEFAULT_BUFFER_SIZE);
+}
+```
+
+</details> 
+
+## Audaspace's Sequence and SequenceEntry
+
+Suppose we want to combine `dt_moon_theme.mp3` and `dt_main_theme.mp3` (or as many we want) into one `wav` file with a `3 second` interval between each audio clip. An approach to do would be using Audaspace's `Sequence` class which allows sequenced entries of audio to be played. In Blender's VSE, it would be represented like so: 
+
+![](example2_sequencer.png){fig-alt="Image of the audio strips inside Blender's video sequence placed next to each other with a 3 second interval in-between"}
+
+
+It turns out, each audio strip contains a variable called `scene_sound` that is a pointer to `AUD_SequenceEntry` or `SequenceEntry`. And the `Sequence` class stores a list of `SequenceEntry`s. The code for outputting the combined audio file would look like the following:
+
+<details> 
+  <summary>Code</summary>
+
+
+```{c++}
+// example2.cpp
+#include <iostream>
+#include "file/File.h"
+#include "file/FileWriter.h"
+#include "sequence/Sequence.h"
+#include "plugin/PluginManager.h"
+using namespace aud;
+
+int main(int argc, char* argv[])
+{
+
+  if (argc < 2) {
+		std::cerr << "Usage: " << argv[0] << " <file1> <file2> ..." << std::endl;
+		return 1;
+	}
+
+  // For some reason, PluginManager::loadPlugins("") needs to be called for this program to not error?
+  PluginManager::loadPlugins("");
+  const double FPS = 30.0;
+  const double INTERVAL_BETWEEN_AUDIO = 3.0;
+ 
+  SampleRate sampleRate = RATE_44100;
+  Specs specs { sampleRate, CHANNELS_MONO };
+  std::shared_ptr<Sequence> seq = std::shared_ptr<Sequence>(new Sequence(specs, FPS, false));
+ 
+  double position = 0;
+ 
+  for (int i = 1; i < argc; i++) {
+    std::shared_ptr<File> file = std::make_shared<File>(argv[i]);
+    double duration = file.get()->queryStreams()[0].duration;
+
+    seq->add(file, position, position + duration, 0);
+    position += duration + INTERVAL_BETWEEN_AUDIO;
+  }
+
+  DeviceSpecs outspecs;
+	outspecs.channels = CHANNELS_MONO;
+	outspecs.rate = sampleRate;
+	outspecs.format = FORMAT_FLOAT32;
+
+
+	std::shared_ptr<IWriter> writer = FileWriter::createWriter("example2.wav", outspecs, CONTAINER_WAV, CODEC_PCM, 0);
+	
+	int totalsamples = int(outspecs.specs.rate * position);
+	printf("Total Samples: %d\n", totalsamples);
+	FileWriter::writeReader(seq->createReader(), writer, totalsamples, AUD_DEFAULT_BUFFER_SIZE);
+
+}
+```
+</details>
+
+In the code above, `seq->add(file, position, position + duration, 0)` creates the `SequenceEntry` and adds to an internal list, as shown by the following code in Audaspace's `SequenceData.cpp`
+
+<details> 
+  <summary>Code</summary>
+
+
+```{c++}
+std::shared_ptr<SequenceEntry> SequenceData::add(std::shared_ptr<ISound> sound, std::shared_ptr<SequenceData> sequence_data, double begin, double end, double skip)
+{
+	std::lock_guard<std::recursive_mutex> lock(m_mutex);
+
+	std::shared_ptr<SequenceEntry> entry = std::shared_ptr<SequenceEntry>(new SequenceEntry(sound, begin, end, skip, sequence_data, m_id++));
+
+	m_entries.push_back(entry);
+	m_entry_status++;
+
+	return entry;
+}
+```
+</details> 
+
+Running `./example2 dt_moon_theme.mp3 dt_main_theme.mp3` results in the following audio clip:
+
+```{python}
+#| echo: false
+from IPython.display import Audio
+Audio("example2.wav", rate=44100)
+```
+
+Notice the 3 second silence between `0:49` and `0:52` and also at the end!
+
+## Animating Pitch
+
+Now suppose we wanted to have the 1st audio clip played at 2x speed. It would be represented like so in Blender's VSE:
+
+
+![](example3_sequencer.png){fig-alt="Image of the audio strips inside Blender's video sequence placed next to each other but the 1st clip has 2x playback speed"}
+
+
+One thing to note is that playback speed and pitch are directly related, where increasing the playback speed by 2x doubles the frequency of a signal and hence increases the pitch by an octave. We can replicate this effect by setting the animation property with the `writeConstantRange` just like how Blender's VSE does.
+
+<details> 
+  <summary>Code</summary>
+
+```{c++}
+// example3.cpp
+#include <iostream>
+
+#include "file/File.h"
+#include "file/FileWriter.h"
+#include "plugin/PluginManager.h"
+#include "sequence/Sequence.h"
+#include "sequence/SequenceEntry.h"
+using namespace aud;
+
+int main(int argc, char* argv[]) {
+  if (argc < 2) {
+    std::cerr << "Usage: " << argv[0] << " <file1> <file2> ..." << std::endl;
+    return 1;
+  }
+
+  // For some reason, PluginManager::loadPlugins("") needs to be called for this program to not error?
+  PluginManager::loadPlugins("");
+  const double FPS = 30.0;
+  const double INTERVAL_BETWEEN_AUDIO = 3.0;
+
+  SampleRate sampleRate = RATE_44100;
+  Specs specs{sampleRate, CHANNELS_MONO};
+  std::shared_ptr<Sequence> seq = std::shared_ptr<Sequence>(new Sequence(specs, FPS, false));
+
+  std::vector<std::shared_ptr<SequenceEntry>> entries;
+
+  double position = 0;
+
+  for (int i = 1; i < argc; i++) {
+    std::shared_ptr<File> file = std::make_shared<File>(argv[i]);
+    double duration = file.get()->queryStreams()[0].duration;
+
+    std::shared_ptr<SequenceEntry> entry = seq->add(file, position, position + duration, 0);
+    entries.push_back(entry);
+    position += duration + INTERVAL_BETWEEN_AUDIO;
+  }
+
+  AnimateableProperty* prop = entries[0]->getAnimProperty(AP_PITCH);
+
+  float pitch = 2.0;
+
+  prop->writeConstantRange(&pitch, 0, 755);
+
+  DeviceSpecs outspecs;
+  outspecs.channels = CHANNELS_MONO;
+  outspecs.rate = sampleRate;
+  outspecs.format = FORMAT_FLOAT32;
+
+  std::shared_ptr<IWriter> writer = FileWriter::createWriter("example3.wav", outspecs, CONTAINER_WAV, CODEC_PCM, 0);
+
+  int totalsamples = int(outspecs.specs.rate * position);
+  printf("Total Samples: %d\n", totalsamples);
+  FileWriter::writeReader(seq->createReader(), writer, totalsamples, AUD_DEFAULT_BUFFER_SIZE);
+}
+```
+
+</details> 
+
+Results:
+
+```{python}
+#| echo: false
+from IPython.display import Audio
+Audio("example3.wav", rate=44100)
+```
+</details> 
+
+
+
+
+
+
+### Animating Sound
+
+Blender uses the `BKE_sound_set_scene_sound_volume_at_frame` method which calls the Audaspace's `AUD_SequenceEntry_setAnimationData` method which looks the following:
+
+
+<details> 
+  <summary>Code</summary>
+```{c++}
+AUD_API void AUD_SequenceEntry_setAnimationData(AUD_SequenceEntry* entry, AUD_AnimateablePropertyType type, int frame, float* data, char animated)
+{
+	AnimateableProperty* prop = (*entry)->getAnimProperty(static_cast<AnimateablePropertyType>(type));
+	if(animated)
+	{
+		if(frame >= 0)
+			prop->write(data, frame, 1);
+	}
+	else
+	{
+		prop->write(data);
+	}
+}
+```
+</details>
+
+How `AUD_SequenceEntry_setAnimationData` works is that if the `animated` flag is set, it sets the audio property at the particular frame. Otherwise, it sets the property for that entire entry.
+
+For an animated example, take the following program
+
+
+<details> 
+  <summary>Code</summary>
+
+```{c++}
+// example4.cpp
+#include <iostream>
+
+#include "file/File.h"
+#include "file/FileWriter.h"
+#include "plugin/PluginManager.h"
+#include "sequence/Sequence.h"
+#include "sequence/SequenceEntry.h"
+
+using namespace aud;
+
+int main(int argc, char* argv[]) {
+  if (argc < 2) {
+    std::cerr << "Usage: " << argv[0] << " <file>" << std::endl;
+    return 1;
+  }
+
+  // For some reason, PluginManager::loadPlugins("") needs to be called for this program to not error?
+  PluginManager::loadPlugins("");
+  const double FPS = 30.0;
+
+  SampleRate sampleRate = RATE_44100;
+  Specs specs{sampleRate, CHANNELS_MONO};
+  std::shared_ptr<Sequence> seq = std::shared_ptr<Sequence>(new Sequence(specs, FPS, false));
+  double position = 0;
+
+  std::shared_ptr<File> file = std::make_shared<File>(argv[1]);
+  double duration = file.get()->queryStreams()[0].duration;
+  std::shared_ptr<SequenceEntry> entry = seq->add(file, position, position + duration, 0);
+  position += duration;
+
+
+  AnimateableProperty* prop = entry->getAnimProperty(AP_VOLUME);
+
+  float volume = 0.2;
+  prop->write(&volume, FPS * 10, 1);
+
+  DeviceSpecs outspecs;
+  outspecs.channels = CHANNELS_MONO;
+  outspecs.rate = sampleRate;
+  outspecs.format = FORMAT_FLOAT32;
+
+  std::shared_ptr<IWriter> writer = FileWriter::createWriter("example4.wav", outspecs, CONTAINER_WAV, CODEC_PCM, 0);
+
+  int totalsamples = int(outspecs.specs.rate * position);
+  printf("Total Samples: %d\n", totalsamples);
+  FileWriter::writeReader(seq->createReader(), writer, totalsamples, AUD_DEFAULT_BUFFER_SIZE);
+}
+```
+</details> 
+
+In this the program above, the volume is set to be `0.2` at the 300th frame (or 10 seconds into the audio) which sounds like so below:
+
+
+```{python}
+#| echo: false
+from IPython.display import Audio
+Audio("example4.wav", rate=44100)
+```
+
+We can also animate other values that we can animate too like pitch `(AP_PITCH)`, panning `(AP_PANNING)`, location `(AP_LOCATION)`, and orientation `(AP_ORIENTATION)`. Here's what it sounds like when pitch `(AP_PITCH)` is animated instead from the program above (replace `entry->getAnimProperty(AP_VOLUME)` with `entry->getAnimProperty(AP_PITCH)`).
+
+```{python}
+#| echo: false
+from IPython.display import Audio
+Audio("example5.wav", rate=44100)
+```
+
+
+
+ It's important to note that animated values like orientation take in array of values as demonstrated below:
+
+```{c++}
+AnimateableProperty* prop = entry->getAnimProperty(AP_ORIENTATION);
+float m_v[4] = { 2, 2, 2, 2 };
+prop->write(m_v, FPS * 10, 1);
+```
+
+
+
+
+
+
+<!-- ```
+void BKE_sound_set_scene_sound_volume_at_frame(void *handle,
+                                               const int frame,
+                                               float volume,
+                                               const char animated)
+{
+  AUD_SequenceEntry_setAnimationData(handle, AUD_AP_VOLUME, frame, &volume, animated);
+}
+``` -->
+
+
+
+
+
+## Effects and Effect Readers
+
+To modify an existing sound, Audaspace uses something called an `Effect` and `EffectReader` for playback of the new audio. These effects can be composed/combined together to make new sounds. Audaspace implements a multitude of these effects in the `fx` folder. However, from what I understand, there's currently only 1 effect used in Blender (the Equalizer, which anecdotally is a bit underdeveloped!). Some of the ones that are the most intuitive to understand is the `Delay` (which simply delays an audio by the specified amount in seconds), `Loop` (which repeats the audio by the specified amount), and `Fader` (which allows audio fade-in and audio fade-out).
+
+There are more complex effects for people more familar with digital music production like `IIRFilter` and `Envelope`, and `Convolver`
+
+Below are some example of the code using the simple effects:
+
+<details> 
+  <summary>Code</summary>
+
+```{c++}
+#include <iostream>
+#include "file/File.h"
+#include "file/FileWriter.h"
+#include "plugin/PluginManager.h"
+#include "Audaspace.h"
+#include "IReader.h"
+#include "util/Buffer.h"
+
+#include "fx/Delay.h"
+#include "fx/Loop.h"
+#include "fx/Fader.h"
+
+using namespace aud;
+
+int main(int argc, char* argv[])
+{
+	if(argc != 2)
+	{
+		std::cerr << "Usage: " << argv[0] << " <filename>" << std::endl;
+		return 1;
+	}
+
+  PluginManager::loadPlugins("");
+  
+	std::shared_ptr<File> file = std::make_shared<File>(argv[1]);
+  
+	StreamInfo streamInfo = file->queryStreams()[0];
+
+	DeviceSpecs outspecs = streamInfo.specs;
+
+
+
+  Delay delay = Delay(file, 3.0);
+  Loop loop = Loop(file, 1);
+  Fader fader = Fader(file, FADE_IN, 0, 20);
+
+  std::shared_ptr<IWriter> delayWriter = FileWriter::createWriter("delay.wav", outspecs, CONTAINER_WAV, CODEC_PCM, 0);
+	std::shared_ptr<IWriter> loopWriter = FileWriter::createWriter("loop.wav", outspecs, CONTAINER_WAV, CODEC_PCM, 0);
+  std::shared_ptr<IWriter> faderWriter = FileWriter::createWriter("fader.wav", outspecs, CONTAINER_WAV, CODEC_PCM, 0);
+  
+	FileWriter::writeReader(delay.createReader(), delayWriter,  int(outspecs.specs.rate * (streamInfo.duration + 3)), AUD_DEFAULT_BUFFER_SIZE);
+  FileWriter::writeReader(loop.createReader(), loopWriter,  int(outspecs.specs.rate * (streamInfo.duration * 2)), AUD_DEFAULT_BUFFER_SIZE);
+  FileWriter::writeReader(fader.createReader(), faderWriter,  int(outspecs.specs.rate * streamInfo.duration), AUD_DEFAULT_BUFFER_SIZE);
+}
+```
+
+</details> 
+
+You can see output audio files [here](../audaspace_rubberband/index.qmd).
+
+## Implementing TimeStretcher and TimeStretcherReader with Rubberband
+
+Using the `Rubberband Library`, I implemented a time stretcher effect [here](https://github.com/neXyon/audaspace/pull/51) (note that the implementation probably doesn't follow best practices).  The most difficult part was moving between the interleaved format and 
+deinterleaved format of audio, as the input audio is in interleaved format but the `Rubberband Library` expects the audio in an deinterleaved format, which then has to be converted the interleaved format after being time-stretched. If the audio was in Stereo for example, the interleaved format would look something like so: `[ L1, R1, L2, R2, L3, R3, ... ]`. Meanwhile, the deinterleaved format would look like: 
+
+```
+CH1: [ L1, L2, L3, ... ]
+CH2: [ R1, R2, R3, ... ]
+```
+
+Here's some example output audio using the `TimeStretch` effect at 2x and 0.5x speed [here](../audaspace_rubberband/index.qmd).
+
+
+## Questions
+
+- When implementing time-stretching in Blender's VSE, how should we handle audio scrubbing and changing the playback speed with the retiming keys while the audio is playing? Time-stretching is very expensive, and it would be good to see how other video editors overcome this... 
+- Should the real-time option of the `Rubberband Library` be used instead of the offline option. The difference between the options can be found [here](https://breakfastquay.com/rubberband/code-doc/). Likely that real-time is used as the time ratio cannot be changed after the audio is "studied"? We can call the `reset` method on the stretcher and pass the original audio data again... (probably not a good idea)
+- Handling speed transitions, so when audio is transitioning playback speed from 13% to 67%, how should that be handled? (Call the `process` method for the stretcher for the different speedw at each frame?)
+
+
+## Pitch Correction Implemention Details Dump 
+
+This may be wildly incorrect or off... but this so far how I imagine pitch correction can be implemented...
+
+- Each `SequenceEntry` has an instance to some `RubberbandStretcher` object...
+- Reuse the pitch animated value to the set the time-stretching...
+- If pitch correction is enabled, the `m_pitch` variable should be set to `1` since the output buffer from the `Rubberband` is already pitch corrected. Replace the original buffer with the output buffer from `Rubberband` (check if this is possible...)
+- Review implementation examples
+ discussed [here](https://breakfastquay.com/rubberband/integration.html#conceptual)
+- Perhaps use offline mode for final render of video? Use real-time mode for everything else?
